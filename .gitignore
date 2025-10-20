@@ -1,0 +1,28 @@
+# Environment variables
+.env
+
+# PyInstaller spec files
+*.spec
+
+# Build and distribution directories
+build/
+dist/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+eggs/
+
+# VS Code
+.vscode/
+.qodo
+.venv
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
