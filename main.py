@@ -4,10 +4,11 @@ from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler
 # FIX: Import Update class for use with application.run_polling
 from telegram import Update 
+from telegram.ext import MessageHandler, filters
 
 from Utilities.general import start_command
 from Utilities.users import add_user_command, users_command
-from Toggl.status import status_command
+from Toggl.status import status_command, status_name_tap_handler
 from Toggl.today import today_command
 from Toggl.wake import wake
 from Supabase.supabase_client import init_supabase, load_tokens_from_db
@@ -55,7 +56,14 @@ def main() -> None:
 
     # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
+    # Handle start keyboard taps (Status, Today, Add user, Users)
+    from telegram.ext import MessageHandler, filters
+    from Utilities.general import start_button_tap_handler
+    start_filter = filters.Regex(r'^(Status|Today|Add user|Users)$') & ~filters.COMMAND
+    application.add_handler(MessageHandler(start_filter, start_button_tap_handler))
     application.add_handler(CommandHandler("status", status_command))
+    # Handle reply-keyboard taps (plain text that is not a command) to map to /status <name>
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, status_name_tap_handler))
     application.add_handler(CommandHandler("today", today_command))
     application.add_handler(CommandHandler("add_user", add_user_command))
     application.add_handler(CommandHandler("users", users_command))

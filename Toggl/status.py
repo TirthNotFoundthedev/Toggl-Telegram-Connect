@@ -5,10 +5,11 @@ from datetime import timedelta, datetime, timezone
 from dotenv import load_dotenv # Required for loading tokens from a .env file
 
 from Toggl.general import format_duration, get_project_name
+from Supabase.supabase_client import get_user_by_tele_id
 
 # --- Telegram Bot Imports ---
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 
 TOGGL_CURRENT_ENTRY_URL = "https://api.track.toggl.com/api/v9/me/time_entries/current"
@@ -130,15 +131,74 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         if not context.args:
-            user_list = ", ".join([u.capitalize() for u in available_users])
+            # Build reply keyboard with only user display names and an 'All' button
+            buttons = []
+            row = []
+            for idx, u in enumerate(available_users):
+                # Show just the display name. We'll handle mapping taps to commands in a MessageHandler.
+                row.append(KeyboardButton(u.capitalize()))
+                # Limit row width to 3 buttons for readability
+                if (idx + 1) % 3 == 0:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+
+            # Add an 'All' button on its own row
+            buttons.append([KeyboardButton("All")])
+
+            # Add a Back button to return to the main menu
+            buttons.append([KeyboardButton("Back")])
+
+            kb = ReplyKeyboardMarkup(buttons, one_time_keyboard=False, resize_keyboard=True)
             await update.message.reply_text(
-                f"Please specify a user key. Example: `/status {available_users[0].capitalize() if available_users else 'Name'}`\n"
-                f"Available users: *{user_list}*",
-                parse_mode='Markdown'
+                "Select a user to check status:",
+                reply_markup=kb
             )
             return
         
         user_key_input = context.args[0].lower()
+
+        # Special-case: '/status all' -> show everyone's status except the invoking user
+        if user_key_input == 'all':
+            sender = update.effective_user
+            sender_tele_id = None
+            try:
+                sender_tele_id = str(sender.id) if sender and sender.id else None
+            except Exception:
+                sender_tele_id = None
+
+            # Try to resolve the invoking user's configured user_name (if any) from Supabase
+            sender_user_name = None
+            if sender_tele_id:
+                try:
+                    row = get_user_by_tele_id(sender_tele_id)
+                    if row and row.get('user_name'):
+                        sender_user_name = row.get('user_name')
+                except Exception:
+                    sender_user_name = None
+
+            # Build combined responses for all users except the sender's configured user_name
+            parts = []
+            for user_key, token in sorted(toggl_token_map.items()):
+                # Skip the invoking user if they have a configured user_name
+                if sender_user_name and user_key.lower() == sender_user_name.lower():
+                    continue
+
+                try:
+                    entry = check_toggl_status(token)
+                    parts.append(generate_telegram_response(user_key, entry, token))
+                except Exception as e:
+                    parts.append(f"🚨 Error checking {user_key.capitalize()}: {e}")
+
+            if not parts:
+                await update.message.reply_text("No other configured users found to show status for.")
+                return
+
+            # Send as a single message separated by double newlines to keep it readable
+            await update.message.reply_text("\n\n".join(parts), parse_mode='Markdown')
+            return
+
         toggl_api_token = toggl_token_map.get(user_key_input)
         
         if not toggl_api_token:
@@ -148,7 +208,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 parse_mode='Markdown'
             )
             return
-        
+
         await update.message.reply_text(f"Checking Toggl status for *{user_key_input.capitalize()}* now...", parse_mode='Markdown')
 
         entry_data = check_toggl_status(toggl_api_token)
@@ -160,6 +220,85 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except:
         await update.message.reply_text("Whoops, IDK what went wrong, but somethind did! Sorry 😔. Contact @TNF2008.")
+
+
+async def status_name_tap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles taps on the reply keyboard which show only names (or 'All').
+
+    Maps the tapped text to the appropriate `/status <user>` or `/status all` invocation
+    by reusing `status_command` logic via a synthetic args list.
+    """
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+
+    toggl_token_map = context.application.bot_data.get('toggl_token_map', {})
+    available_users = sorted(toggl_token_map.keys())
+    # Track which menu was shown last for this user (may be set by other handlers)
+    last_menu = None
+    try:
+        last_menu = context.user_data.get('last_menu')
+    except Exception:
+        last_menu = None
+
+    # Handle Back/Menu to return to the general start menu
+    if text.lower() in ('back', 'menu'):
+        # Delegate to the main start_command which will show the general keyboard
+        try:
+            from Utilities.general import start_command
+            context.args = []
+            await start_command(update, context)
+        except Exception:
+            # Fall back to a simple message if something goes wrong
+            await update.message.reply_text("Returning to main menu... (but the menu could not be displayed)")
+        return
+
+    # If user tapped 'All' (case-insensitive), delegate based on which menu was last shown
+    if text.lower() == 'all':
+        if last_menu == 'today':
+            try:
+                from Toggl.today import today_command
+                context.args = ['all']
+                await today_command(update, context)
+                try:
+                    context.user_data.pop('last_menu', None)
+                except Exception:
+                    pass
+            except Exception:
+                # fallback to status behavior
+                context.args = ['all']
+                await status_command(update, context)
+            return
+        else:
+            # default to status behavior
+            context.args = ['all']
+            await status_command(update, context)
+            return
+
+    # Match tapped display name to a configured user key (case-insensitive)
+    for user_key in available_users:
+        if text.lower() == user_key.lower() or text.lower() == user_key.capitalize().lower():
+            if last_menu == 'today':
+                try:
+                    from Toggl.today import today_command
+                    context.args = [user_key]
+                    await today_command(update, context)
+                    try:
+                        context.user_data.pop('last_menu', None)
+                    except Exception:
+                        pass
+                except Exception:
+                    # fallback
+                    context.args = [user_key]
+                    await status_command(update, context)
+                return
+            else:
+                context.args = [user_key]
+                await status_command(update, context)
+                return
+
+    # If no match, ignore (or optionally inform the user)
+    await update.message.reply_text("Selected name not recognized. Try /status <name> or /status all.")
 
 
     

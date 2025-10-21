@@ -3,8 +3,9 @@ from datetime import timedelta, datetime, timezone
 import requests
 
 from Toggl.general import format_duration, get_project_name
+from Supabase.supabase_client import get_user_by_tele_id
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 
@@ -23,13 +24,169 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if not context.args:
+        # Build reply keyboard with only user display names and an 'All' + 'Back' button
+        buttons = []
+        row = []
+        available_users = sorted(toggl_token_map.keys())
+        for idx, u in enumerate(available_users):
+            row.append(KeyboardButton(u.capitalize()))
+            if (idx + 1) % 3 == 0:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+
+        buttons.append([KeyboardButton("All")])
+        buttons.append([KeyboardButton("Back")])
+
+        kb = ReplyKeyboardMarkup(buttons, one_time_keyboard=False, resize_keyboard=True)
+        # mark that the last shown menu is 'today' so the global text handler can route taps
+        try:
+            context.user_data['last_menu'] = 'today'
+        except Exception:
+            pass
+
         await update.message.reply_text(
-            "Usage: `/today <name> [YYYY-MM-DD]`\nExample: `/today alice` or `/today alice 2023-08-01`",
-            parse_mode='Markdown'
+            "Select a user to view today's totals:",
+            reply_markup=kb
         )
         return
 
     user_key_input = context.args[0].lower()
+    # Special-case: '/today all' -> show only totals for each user and also show the invoking user's total
+    if user_key_input == 'all':
+        # Determine date to query: either provided or today IN LOCAL TIMEZONE
+        try:
+            if len(context.args) > 1:
+                arg = context.args[1].strip()
+                # Support offsets like -1 .. -7 meaning yesterday .. 7 days ago
+                if arg.startswith('-') and arg[1:].isdigit():
+                    offset = int(arg)
+                    if -7 <= offset <= -1:
+                        query_date = (datetime.now().astimezone().date() + timedelta(days=offset))
+                    else:
+                        raise ValueError("Offset out of supported range (-1 to -7)")
+                else:
+                    query_date = datetime.fromisoformat(arg).date()
+            else:
+                query_date = datetime.now().astimezone().date()
+        except Exception:
+            await update.message.reply_text("Invalid date format. Use YYYY-MM-DD or -1..-7 for offsets.", parse_mode='Markdown')
+            return
+
+        # Use local timezone boundaries so the query covers the same local day
+        local_tz = datetime.now().astimezone().tzinfo
+        start_dt_local = datetime.combine(query_date, datetime.min.time()).replace(tzinfo=local_tz)
+        end_dt_local = start_dt_local + timedelta(days=1)
+
+        # Convert to UTC ISO strings for the Toggl API
+        start_iso = start_dt_local.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+        end_iso = end_dt_local.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+        sender = update.effective_user
+        sender_tele_id = None
+        try:
+            sender_tele_id = str(sender.id) if sender and sender.id else None
+        except Exception:
+            sender_tele_id = None
+
+        sender_user_name = None
+        if sender_tele_id:
+            try:
+                row = get_user_by_tele_id(sender_tele_id)
+                if row and row.get('user_name'):
+                    sender_user_name = row.get('user_name')
+            except Exception:
+                sender_user_name = None
+
+        ENTRIES_URL = "https://api.track.toggl.com/api/v9/me/time_entries"
+
+        totals = []
+        # Iterate configured users and compute total seconds for the day
+        for user_key, token in sorted(toggl_token_map.items()):
+            try:
+                resp = requests.get(
+                    ENTRIES_URL,
+                    auth=(token, 'api_token'),
+                    params={'start': start_iso, 'end': end_iso},
+                    timeout=10
+                )
+                resp.raise_for_status()
+                entries = resp.json()
+            except requests.exceptions.HTTPError as errh:
+                if errh.response.status_code in [401, 403]:
+                    totals.append((user_key, None, 'auth'))
+                    continue
+                totals.append((user_key, None, f'http:{errh}'))
+                continue
+            except requests.exceptions.RequestException as err:
+                totals.append((user_key, None, f'net:{err}'))
+                continue
+            except Exception as e:
+                totals.append((user_key, None, str(e)))
+                continue
+
+            # Sum durations for entries whose start is within local-day bounds (same logic as per-user)
+            def safe_start_dt(e):
+                s = e.get('start')
+                if not s:
+                    return None
+                try:
+                    return datetime.fromisoformat(s.replace('Z', '+00:00'))
+                except Exception:
+                    return None
+
+            total_seconds = 0
+            for e in entries:
+                sdt = safe_start_dt(e)
+                if not sdt:
+                    continue
+                # Only include entries that started within the local-day bounds
+                if not (start_dt_local.astimezone(timezone.utc) <= sdt < end_dt_local.astimezone(timezone.utc)):
+                    continue
+
+                duration_val = e.get('duration')
+                if isinstance(duration_val, int) and duration_val >= 0:
+                    total_seconds += int(duration_val)
+                else:
+                    try:
+                        start_s = e.get('start')
+                        stop_s = e.get('stop')
+                        start_dt = datetime.fromisoformat(start_s.replace('Z', '+00:00'))
+                        stop_dt = datetime.fromisoformat(stop_s.replace('Z', '+00:00')) if stop_s else datetime.now(timezone.utc)
+                        total_seconds += int((stop_dt - start_dt).total_seconds())
+                    except Exception:
+                        pass
+
+            totals.append((user_key, total_seconds, None))
+
+        # Build message lines: show totals only and also show invoking user's total highlighted
+        lines = []
+        for user_key, secs, err in totals:
+            display_name = user_key.capitalize()
+            if err == 'auth':
+                lines.append(f"- {display_name}: 🚨 Authentication failed")
+            elif err and err.startswith('http:'):
+                lines.append(f"- {display_name}: 🚨 HTTP error")
+            elif err and err.startswith('net:'):
+                lines.append(f"- {display_name}: 🚨 Network error")
+            elif err:
+                lines.append(f"- {display_name}: 🚨 {err}")
+            else:
+                formatted = format_duration(secs or 0)
+                if sender_user_name and user_key.lower() == sender_user_name.lower():
+                    lines.append(f"- *{display_name} (you):* `{formatted}`")
+                else:
+                    lines.append(f"- {display_name}: `{formatted}`")
+
+        message = (
+            f"📅 *Today's totals for configured users on {query_date}*\n\n"
+            + "\n".join(lines)
+        )
+
+        await update.message.reply_text(message, parse_mode='Markdown')
+        return
+
     toggl_api_token = toggl_token_map.get(user_key_input)
     if not toggl_api_token:
         available_users = ", ".join([u.capitalize() for u in sorted(toggl_token_map.keys())])
@@ -42,11 +199,19 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Determine date to query: either provided or today IN LOCAL TIMEZONE
     try:
         if len(context.args) > 1:
-            query_date = datetime.fromisoformat(context.args[1]).date()
+            arg = context.args[1].strip()
+            if arg.startswith('-') and arg[1:].isdigit():
+                offset = int(arg)
+                if -7 <= offset <= -1:
+                    query_date = (datetime.now().astimezone().date() + timedelta(days=offset))
+                else:
+                    raise ValueError("Offset out of supported range (-1 to -7)")
+            else:
+                query_date = datetime.fromisoformat(arg).date()
         else:
             query_date = datetime.now().astimezone().date()
     except Exception:
-        await update.message.reply_text("Invalid date format. Use YYYY-MM-DD.", parse_mode='Markdown')
+        await update.message.reply_text("Invalid date format. Use YYYY-MM-DD or -1..-7 for offsets.", parse_mode='Markdown')
         return
 
     # Use local timezone boundaries so the query covers the same local day

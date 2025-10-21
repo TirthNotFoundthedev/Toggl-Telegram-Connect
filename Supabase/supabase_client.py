@@ -153,3 +153,31 @@ def get_user_by_tele_id(tele_id: str):
     except Exception as e:
         logger.error(f"Error querying user by tele_id '{tele_id}': {e}")
         return None
+
+
+def get_all_users_with_tele_id():
+    """Return a list of all user rows that have a tele_id configured.
+
+    Each returned row is a dict and should include at least the keys:
+      - 'user_name'
+      - 'tele_id'
+      - 'toggl_token'
+
+    This is used by other code (e.g., `Toggl.wake`) which expects to iterate
+    the returned rows and call `row.get('tele_id')` and `row.get('toggl_token')`.
+    """
+    if not supabase:
+        logger.error("Supabase client not initialized.")
+        return []
+
+    try:
+        # Select rows where tele_id is not null/empty
+        response = supabase.table(TABLE_NAME).select("user_name, tele_id, toggl_token").neq('tele_id', None).execute()
+        if getattr(response, 'data', None):
+            # Filter out rows with empty tele_id values just in case
+            rows = [r for r in response.data if r.get('tele_id')]
+            return rows
+        return []
+    except Exception as e:
+        logger.error(f"Error fetching users with tele_id: {e}")
+        return []
