@@ -155,6 +155,50 @@ def get_user_by_tele_id(tele_id: str):
         return None
 
 
+def get_wake_cooldown(tele_id: str):
+    """Return the wake_cooldown JSON stored for the user with given tele_id.
+
+    Returns a dict (may be empty) or None if user/DB not found.
+    """
+    if not supabase:
+        logger.error("Supabase client not initialized.")
+        return None
+
+    try:
+        response = supabase.table(TABLE_NAME).select("wake_cooldown").eq('tele_id', str(tele_id)).limit(1).execute()
+        if getattr(response, 'data', None) and len(response.data) > 0:
+            row = response.data[0]
+            wc = row.get('wake_cooldown')
+            # Ensure we return a dict
+            if wc is None:
+                return {}
+            return wc
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching wake_cooldown for tele_id '{tele_id}': {e}")
+        return None
+
+
+def set_wake_cooldown(tele_id: str, wake_cooldown: dict) -> bool:
+    """Update the wake_cooldown JSONB column for the given tele_id.
+
+    Returns True on success, False otherwise.
+    """
+    if not supabase:
+        logger.error("Supabase client not initialized.")
+        return False
+
+    try:
+        response = supabase.table(TABLE_NAME).update({
+            'wake_cooldown': wake_cooldown
+        }).eq('tele_id', str(tele_id)).execute()
+        # response.error may exist depending on client; assume success if no exception
+        return True
+    except Exception as e:
+        logger.error(f"Error updating wake_cooldown for tele_id '{tele_id}': {e}")
+        return False
+
+
 def get_all_users_with_tele_id():
     """Return a list of all user rows that have a tele_id configured.
 
@@ -181,3 +225,26 @@ def get_all_users_with_tele_id():
     except Exception as e:
         logger.error(f"Error fetching users with tele_id: {e}")
         return []
+
+
+def log_command(user_name: str, command: str, response_success: bool) -> bool:
+    """Insert a row into the `Command Logs` table recording a command usage.
+
+    user_name may be None or a string. Returns True on success.
+    """
+    if not supabase:
+        logger.error("Supabase client not initialized. Cannot log command.")
+        return False
+
+    try:
+        data = {
+            'user_name': user_name,
+            'command': command,
+            'response_success': bool(response_success),
+        }
+        # Insert into table named exactly 'Command Logs'
+        supabase.table('Command Logs').insert(data).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to log command to Supabase: {e}")
+        return False

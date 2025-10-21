@@ -2,6 +2,7 @@ import logging
 import re
 from telegram import Update
 from telegram.ext import ContextTypes
+from Utilities.command_logging import log_command_usage
 
 # --- CRITICAL CHANGE: Import Supabase functions from the correct local file ---
 from Supabase.supabase_client import save_token_to_db 
@@ -9,6 +10,7 @@ from Supabase.supabase_client import save_token_to_db
 
 logger = logging.getLogger(__name__)
 
+@log_command_usage('add_user')
 async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Implements /add_user <name> <token>. Adds a token for any user, persisting to Supabase.
@@ -81,6 +83,7 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         
 
 
+@log_command_usage('users')
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lists all currently configured user keys from the in-memory map."""
     # We rely on the map being updated after successful /add_user or on startup.

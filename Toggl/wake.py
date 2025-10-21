@@ -3,11 +3,18 @@ import html
 from telegram import Update, Chat, User
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+from Utilities.command_logging import log_command_usage
 from datetime import datetime, timezone, timedelta
 import logging
 
 # Supabase helper to resolve configured users to their telegram id
-from Supabase.supabase_client import get_tele_id_for_user, get_user_by_tele_id, get_all_users_with_tele_id
+from Supabase.supabase_client import (
+    get_tele_id_for_user,
+    get_user_by_tele_id,
+    get_all_users_with_tele_id,
+    get_wake_cooldown,
+    set_wake_cooldown,
+)
 from Toggl.status import check_toggl_status
 
 
@@ -18,6 +25,7 @@ async def _mention_html(user: User) -> str:
     name = html.escape(user.full_name or user.first_name or "User")
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
+@log_command_usage('wake')
 async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Command handler to "wake" a user.
@@ -59,9 +67,12 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         args = context.args or []
         if not args:
-            await update.effective_message.reply_text(
-                "Usage: /wake <@username|user_id>  or reply to a user's message with /wake"
-            )
+            # Show centralized wake menu
+            try:
+                from Utilities.button_handlers import show_wake_menu
+                await show_wake_menu(update, context)
+            except Exception:
+                await update.effective_message.reply_text("Who would you like to wake?")
             return
 
         name = args[0].strip()
@@ -107,13 +118,22 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     except Exception:
                         pass
 
-                    # Rate limit per sender->target
+                    # Rate limit per sender->target. Persisted per-target in Supabase
                     try:
                         wake_map = context.application.bot_data.setdefault('wake_map', {})
                     except Exception:
                         wake_map = {}
-                    rate_key = f"{sender.id}:{tele}"
-                    last_iso = wake_map.get(rate_key)
+
+                    # Ensure we have a per-target dict cached
+                    tele_key = str(tele)
+                    if tele_key not in wake_map:
+                        try:
+                            db_wc = get_wake_cooldown(tele_key)
+                        except Exception:
+                            db_wc = None
+                        wake_map[tele_key] = db_wc or {}
+
+                    last_iso = wake_map[tele_key].get(str(sender.id))
                     rate_limited = False
                     if last_iso:
                         try:
@@ -133,9 +153,13 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     try:
                         await bot.send_message(chat_id=int(tele), text=private_text_all, parse_mode=ParseMode.HTML)
                         summary['sent'] += 1
-                        # Update rate limiter timestamp
+                        # Update rate limiter timestamp (in-memory + persist)
                         try:
-                            wake_map[rate_key] = datetime.now(timezone.utc).isoformat()
+                            wake_map.setdefault(tele_key, {})[str(sender.id)] = datetime.now(timezone.utc).isoformat()
+                            try:
+                                set_wake_cooldown(tele_key, wake_map[tele_key])
+                            except Exception:
+                                logging.exception("Failed to persist wake_cooldown for tele_id=%s", tele_key)
                         except Exception:
                             pass
                     except Exception:
@@ -243,8 +267,15 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             # Fallback if application or bot_data isn't available
             wake_map = {}
 
-        rate_key = f"{sender.id}:{target_user_id}"
-        last_iso = wake_map.get(rate_key)
+        tele_key = str(target_user_id)
+        if tele_key not in wake_map:
+            try:
+                db_wc = get_wake_cooldown(tele_key)
+            except Exception:
+                db_wc = None
+            wake_map[tele_key] = db_wc or {}
+
+        last_iso = wake_map[tele_key].get(str(sender.id))
         if last_iso:
             try:
                 last_dt = datetime.fromisoformat(last_iso)
@@ -281,9 +312,14 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Sent a wake-up message to {target_mention_for_chat} (from {sender_mention}).",
         parse_mode=ParseMode.HTML,
     )
-    # Update rate limiter timestamp for this sender->target pair
+    # Update rate limiter timestamp for this sender->target pair (persisted)
     try:
         wake_map = context.application.bot_data.setdefault('wake_map', {})
-        wake_map[f"{sender.id}:{target_user_id}"] = datetime.now(timezone.utc).isoformat()
+        tele_key = str(target_user_id)
+        wake_map.setdefault(tele_key, {})[str(sender.id)] = datetime.now(timezone.utc).isoformat()
+        try:
+            set_wake_cooldown(tele_key, wake_map[tele_key])
+        except Exception:
+            logging.exception("Failed to persist wake_cooldown for tele_id=%s", tele_key)
     except Exception:
         pass

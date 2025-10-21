@@ -8,10 +8,12 @@ from telegram.ext import MessageHandler, filters
 
 from Utilities.general import start_command
 from Utilities.users import add_user_command, users_command
-from Toggl.status import status_command, status_name_tap_handler
+from Toggl.status import status_command
 from Toggl.today import today_command
 from Toggl.wake import wake
 from Supabase.supabase_client import init_supabase, load_tokens_from_db
+from Supabase.supabase_client import get_all_users_with_tele_id, get_wake_cooldown
+from Utilities.admin import view_wake_cooldowns, reset_wake_cooldown
 
 # Configure logging
 logging.basicConfig(
@@ -54,20 +56,36 @@ def main() -> None:
     application.bot_data['toggl_token_map'] = toggl_token_map
     logger.info(f"Bot initialized with {len(toggl_token_map)} users from Supabase.")
 
+    # Preload wake cooldowns for configured users (small userbase; safe to preload)
+    try:
+        wake_map = application.bot_data.setdefault('wake_map', {})
+        users_with_tele = get_all_users_with_tele_id() or []
+        for row in users_with_tele:
+            tele = row.get('tele_id')
+            if not tele:
+                continue
+            wc = get_wake_cooldown(str(tele)) or {}
+            wake_map[str(tele)] = wc
+        logger.info(f"Preloaded wake_cooldown for {len(wake_map)} users.")
+    except Exception:
+        logger.exception("Failed to preload wake_cooldown values from Supabase")
+
     # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
-    # Handle start keyboard taps (Status, Today, Add user, Users)
-    from telegram.ext import MessageHandler, filters
-    from Utilities.general import start_button_tap_handler
-    start_filter = filters.Regex(r'^(Status|Today|Add user|Users)$') & ~filters.COMMAND
-    application.add_handler(MessageHandler(start_filter, start_button_tap_handler))
+    # Register command handlers
     application.add_handler(CommandHandler("status", status_command))
-    # Handle reply-keyboard taps (plain text that is not a command) to map to /status <name>
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, status_name_tap_handler))
     application.add_handler(CommandHandler("today", today_command))
     application.add_handler(CommandHandler("add_user", add_user_command))
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("wake", wake))
+    # Admin commands
+    application.add_handler(CommandHandler("wake_cooldowns", view_wake_cooldowns))
+    application.add_handler(CommandHandler("wake_cooldown_reset", reset_wake_cooldown))
+
+    # Centralized plain-text button router (handles start/status/today/wake menus)
+    from telegram.ext import MessageHandler, filters
+    from Utilities.button_handlers import button_tap_router
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_tap_router))
 
     # Run the bot until the user presses Ctrl-C
     logger.info("Bot started. Press Ctrl-C to stop.")

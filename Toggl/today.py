@@ -5,10 +5,13 @@ import requests
 from Toggl.general import format_duration, get_project_name
 from Supabase.supabase_client import get_user_by_tele_id
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from Utilities.button_handlers import show_today_menu
+from Utilities.command_logging import log_command_usage
 
 
+@log_command_usage('today')
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lists all time entries for the given user for today (or a specified date).
     Uses the local system timezone bounds (so the query covers the same local day),
@@ -24,32 +27,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if not context.args:
-        # Build reply keyboard with only user display names and an 'All' + 'Back' button
-        buttons = []
-        row = []
-        available_users = sorted(toggl_token_map.keys())
-        for idx, u in enumerate(available_users):
-            row.append(KeyboardButton(u.capitalize()))
-            if (idx + 1) % 3 == 0:
-                buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-
-        buttons.append([KeyboardButton("All")])
-        buttons.append([KeyboardButton("Back")])
-
-        kb = ReplyKeyboardMarkup(buttons, one_time_keyboard=False, resize_keyboard=True)
-        # mark that the last shown menu is 'today' so the global text handler can route taps
-        try:
-            context.user_data['last_menu'] = 'today'
-        except Exception:
-            pass
-
-        await update.message.reply_text(
-            "Select a user to view today's totals:",
-            reply_markup=kb
-        )
+        await show_today_menu(update, context)
         return
 
     user_key_input = context.args[0].lower()
