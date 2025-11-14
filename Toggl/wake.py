@@ -53,16 +53,19 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     # Determine target
-    # Determine target
     target_user_id: Optional[int] = None
     target_name_display: str = ""
     target_user_obj: Optional[User] = None
+    custom_message: Optional[str] = None
 
     # 1) If command is a reply, use the replied-to user
     if update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user:
         target_user_obj = update.effective_message.reply_to_message.from_user
         target_user_id = target_user_obj.id
         target_name_display = target_user_obj.full_name or target_user_obj.first_name
+        # Remaining args are the custom message
+        if context.args:
+            custom_message = " ".join(context.args)
 
     else:
         args = context.args or []
@@ -75,10 +78,11 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await update.effective_message.reply_text("Who would you like to wake?")
             return
 
-        name = args[0].strip()
+        first_arg = args[0].strip()
+        remaining_args = args[1:] # The rest of the arguments are the custom message
 
         # Special case: wake all configured users (except the sender)
-        if name.lower() == 'all':
+        if first_arg.lower() == 'all':
             users = get_all_users_with_tele_id()
             if not users:
                 await update.effective_message.reply_text("No configured users with Telegram IDs found.")
@@ -91,6 +95,21 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 'rate_limited': 0,
                 'failed': 0,
             }
+
+            # Custom message for 'all' command
+            if remaining_args:
+                custom_message = " ".join(remaining_args)
+
+            # Build private_text_all with custom message if present
+            private_text_all_base = (
+                f"⏰ Hey!\n\n"
+                f"It's time to start studying — you were woken up by {sender_mention}.\n\n"
+                f"Get going and good luck!"
+            )
+            if custom_message:
+                private_text_all = f"{private_text_all_base}\n\nCustom message: {custom_message}"
+            else:
+                private_text_all = private_text_all_base
 
             for row in users:
                 try:
@@ -151,8 +170,15 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
                     # Attempt send
                     try:
-                        await bot.send_message(chat_id=int(tele), text=private_text_all, parse_mode=ParseMode.HTML)
+                        sent_message = await bot.send_message(chat_id=int(tele), text=private_text_all, parse_mode=ParseMode.HTML)
                         summary['sent'] += 1
+                        # Store wake message metadata for reply handling
+                        wake_message_replies = context.application.bot_data.setdefault('wake_message_replies', {})
+                        wake_message_replies[sent_message.message_id] = {
+                            'sender_id': sender.id,
+                            'target_id': int(tele),
+                            'has_replied': False
+                        }
                         # Update rate limiter timestamp (in-memory + persist)
                         try:
                             wake_map.setdefault(tele_key, {})[str(sender.id)] = datetime.now(timezone.utc).isoformat()
@@ -178,25 +204,29 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         # 2) If mentions a username like @username, try to resolve to a chat (works if bot can access the user)
-        if name.startswith("@"):
+        if first_arg.startswith("@"):
             try:
-                target_chat: Chat = await bot.get_chat(name)
+                target_chat: Chat = await bot.get_chat(first_arg)
                 target_user_id = target_chat.id
-                target_name_display = getattr(target_chat, "first_name", None) or getattr(target_chat, "title", name)
+                target_name_display = getattr(target_chat, "first_name", None) or getattr(target_chat, "title", first_arg)
+                if remaining_args:
+                    custom_message = " ".join(remaining_args)
             except Exception:
                 # fall through to other methods
                 target_user_id = None
 
         # 3) If numeric id provided
-        if target_user_id is None and name.isdigit():
-            target_user_id = int(name)
-            target_name_display = name
+        if target_user_id is None and first_arg.isdigit():
+            target_user_id = int(first_arg)
+            target_name_display = first_arg
+            if remaining_args:
+                custom_message = " ".join(remaining_args)
 
         # 4) If argument is not numeric and not a username starting with @, try resolving as a configured user key
-        if target_user_id is None and not name.startswith("@"):
+        if target_user_id is None and not first_arg.startswith("@"):
             # Try to find a tele_id stored in Supabase for this user key
             try:
-                tele = get_tele_id_for_user(name.lower())
+                tele = get_tele_id_for_user(first_arg.lower())
                 if tele:
                     # tele is stored as string in Supabase; convert to int when possible
                     try:
@@ -204,7 +234,9 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     except Exception:
                         # If it can't be parsed, keep as string id (Telegram accepts numeric ids)
                         target_user_id = tele
-                    target_name_display = name
+                    target_name_display = first_arg
+                    if remaining_args:
+                        custom_message = " ".join(remaining_args)
             except Exception:
                 pass
 
@@ -212,13 +244,15 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if target_user_id is None and chat is not None:
             try:
                 admins = await bot.get_chat_administrators(chat.id)
-                lowered = name.lstrip("@").lower()
+                lowered = first_arg.lstrip("@").lower()
                 for member in admins:
                     u = member.user
                     if lowered in (u.username or "").lower() or lowered in (u.full_name or "").lower() or lowered in (u.first_name or "").lower():
                         target_user_obj = u
                         target_user_id = u.id
                         target_name_display = u.full_name or u.first_name
+                        if remaining_args:
+                            custom_message = " ".join(remaining_args)
                         break
             except Exception:
                 pass  # ignore admin lookup failures
@@ -237,11 +271,15 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         target_mention_for_chat = html.escape(target_name_display or str(target_user_id))
         target_display_safe = html.escape(target_name_display or str(target_user_id))
 
-    private_text = (
+    private_text_base = (
         f"⏰ Hey!\n\n"
         f"It's time to start studying — you were woken up by {sender_mention}.\n\n"
         f"Get going and good luck!"
     )
+    if custom_message:
+        private_text = f"{private_text_base}\n\nCustom message: {custom_message}"
+    else:
+        private_text = private_text_base
 
     # Attempt sending private message
     try:
@@ -294,12 +332,19 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 return
 
-        await bot.send_message(
+        sent_message = await bot.send_message(
             chat_id=target_user_id,
             text=private_text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
+        # Store wake message metadata for reply handling
+        wake_message_replies = context.application.bot_data.setdefault('wake_message_replies', {})
+        wake_message_replies[sent_message.message_id] = {
+            'sender_id': sender.id,
+            'target_id': target_user_id,
+            'has_replied': False
+        }
     except Exception as e:
         # Common reason: bot can't message the user (privacy settings) or blocked
         await update.effective_message.reply_text(

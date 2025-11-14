@@ -1,7 +1,5 @@
 import requests
 import logging
-from datetime import timedelta
-from html import escape
 
 def get_project_name(api_token: str, project_id: int, workspace_id: int) -> str:
     """
@@ -41,6 +39,18 @@ def get_project_name(api_token: str, project_id: int, workspace_id: int) -> str:
         return f"Network Error: {err}"
     
 def format_duration(seconds):
-    """Converts a duration in seconds to a human-readable H:MM:SS format."""
-    return str(timedelta(seconds=int(seconds)))
+    """
+    Converts a duration in seconds to a human-readable H:MM:SS format,
+    where the hours component includes the total number of hours (including days).
+    """
+    total_seconds = int(seconds)
+    
+    # Calculate total hours, minutes, and remaining seconds
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    remaining_seconds = total_seconds % 60
+    
+    # Format the result as H:MM:SS
+    # Use the format string to ensure minutes and seconds are always 2 digits
+    return f"{hours}:{minutes:02}:{remaining_seconds:02}"
 

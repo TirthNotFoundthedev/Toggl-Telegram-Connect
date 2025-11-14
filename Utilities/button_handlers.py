@@ -64,8 +64,9 @@ async def show_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # The start menu labels are simple static choices
     reply_keyboard = [
         [KeyboardButton('Status'), KeyboardButton('Today')],
-        [KeyboardButton('Wake'), KeyboardButton('Add user')],
-        [KeyboardButton('Users')]
+        [KeyboardButton('Wake'), KeyboardButton('Leaderboard')],
+        [KeyboardButton("Focus-Noise-Ratio")]
+        [KeyboardButton('Users'), KeyboardButton('Add user')]
     ]
     kb = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True, one_time_keyboard=True)
     # mark the last menu as 'home' so taps know the user is on the start/home menu
@@ -77,6 +78,19 @@ async def show_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         'Welcome! Use the buttons below or the commands shown for advanced options.\n\nUse "Wake" to send a wake-up message to a user or everyone.',
         reply_markup=kb,
     )
+
+
+async def show_leaderboard_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reply_keyboard = [
+        [KeyboardButton('Daily'), KeyboardButton('Weekly')],
+        [KeyboardButton('Back')]
+    ]
+    try:
+        context.user_data['last_menu'] = 'leaderboard'
+    except Exception:
+        pass
+    kb = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.effective_message.reply_text('Choose leaderboard period:', reply_markup=kb)
 
 
 async def button_tap_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -147,6 +161,25 @@ async def button_tap_router(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 pass
         return
 
+    if last_menu == 'leaderboard':
+        try:
+            from Toggl.leaderboard import leaderboard_command
+            if text.lower() in ('daily', 'day'):
+                context.args = ['daily']
+            elif text.lower() in ('weekly', 'week'):
+                context.args = ['weekly']
+            else:
+                context.args = []
+            await leaderboard_command(update, context)
+        except Exception:
+            await update.message.reply_text('Could not handle leaderboard selection.')
+        finally:
+            try:
+                context.user_data.pop('last_menu', None)
+            except Exception:
+                pass
+        return
+
     # No last_menu: treat as start menu labels
     if text.lower() == 'status':
         await show_status_menu(update, context)
@@ -156,6 +189,9 @@ async def button_tap_router(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     if text.lower() == 'wake':
         await show_wake_menu(update, context)
+        return
+    if text.lower() == 'leaderboard' or text.lower() == 'lb':
+        await show_leaderboard_menu(update, context)
         return
     if text.lower() == 'add user':
         try:

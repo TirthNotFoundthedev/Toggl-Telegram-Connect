@@ -11,9 +11,11 @@ from Utilities.users import add_user_command, users_command
 from Toggl.status import status_command
 from Toggl.today import today_command
 from Toggl.wake import wake
+from Toggl.leaderboard import leaderboard_command
 from Supabase.supabase_client import init_supabase, load_tokens_from_db
 from Supabase.supabase_client import get_all_users_with_tele_id, get_wake_cooldown
 from Utilities.admin import view_wake_cooldowns, reset_wake_cooldown
+from Toggl.fnr import fnr_command
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +56,7 @@ def main() -> None:
 
     # Store the map where all handlers can access it
     application.bot_data['toggl_token_map'] = toggl_token_map
+    application.bot_data['wake_message_replies'] = {} # Initialize for wake message reply tracking
     logger.info(f"Bot initialized with {len(toggl_token_map)} users from Supabase.")
 
     # Preload wake cooldowns for configured users (small userbase; safe to preload)
@@ -75,17 +78,23 @@ def main() -> None:
     # Register command handlers
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("today", today_command))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("lb", leaderboard_command))
     application.add_handler(CommandHandler("add_user", add_user_command))
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("wake", wake))
+    application.add_handler(CommandHandler("fnr", fnr_command))
     # Admin commands
     application.add_handler(CommandHandler("wake_cooldowns", view_wake_cooldowns))
     application.add_handler(CommandHandler("wake_cooldown_reset", reset_wake_cooldown))
 
+    # Handler for replies to wake messages
+    from Utilities.reply_handler import handle_wake_reply
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wake_reply), group=0)
+
     # Centralized plain-text button router (handles start/status/today/wake menus)
-    from telegram.ext import MessageHandler, filters
     from Utilities.button_handlers import button_tap_router
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_tap_router))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_tap_router), group=1)
 
     # Run the bot until the user presses Ctrl-C
     logger.info("Bot started. Press Ctrl-C to stop.")
