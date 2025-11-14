@@ -70,12 +70,7 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         args = context.args or []
         if not args:
-            # Show centralized wake menu
-            try:
-                from Utilities.button_handlers import show_wake_menu
-                await show_wake_menu(update, context)
-            except Exception:
-                await update.effective_message.reply_text("Who would you like to wake?")
+            await update.effective_message.reply_text("Who would you like to wake? Usage: `/wake <user>` or `/wake all`")
             return
 
         first_arg = args[0].strip()
@@ -172,12 +167,23 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     try:
                         sent_message = await bot.send_message(chat_id=int(tele), text=private_text_all, parse_mode=ParseMode.HTML)
                         summary['sent'] += 1
-                        # Store wake message metadata for reply handling
-                        wake_message_replies = context.application.bot_data.setdefault('wake_message_replies', {})
-                        wake_message_replies[sent_message.message_id] = {
+                        # New logic: Invalidate previous wake for this target and store new one
+                        wake_lookup = context.application.bot_data.setdefault('wake_message_lookup', {})
+                        user_active_wake = context.application.bot_data.setdefault('user_active_wake', {})
+                        
+                        target_id = int(tele)
+
+                        # If there was a previous active wake for this user, remove it
+                        if target_id in user_active_wake:
+                            old_message_id = user_active_wake.pop(target_id)
+                            if old_message_id in wake_lookup:
+                                wake_lookup.pop(old_message_id)
+
+                        # Store the new wake message
+                        user_active_wake[target_id] = sent_message.message_id
+                        wake_lookup[sent_message.message_id] = {
                             'sender_id': sender.id,
-                            'target_id': int(tele),
-                            'has_replied': False
+                            'target_id': target_id,
                         }
                         # Update rate limiter timestamp (in-memory + persist)
                         try:
@@ -338,12 +344,21 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        # Store wake message metadata for reply handling
-        wake_message_replies = context.application.bot_data.setdefault('wake_message_replies', {})
-        wake_message_replies[sent_message.message_id] = {
+        # New logic: Invalidate previous wake and store new one
+        wake_lookup = context.application.bot_data.setdefault('wake_message_lookup', {})
+        user_active_wake = context.application.bot_data.setdefault('user_active_wake', {})
+
+        # If there was a previous active wake for this user, remove it
+        if target_user_id in user_active_wake:
+            old_message_id = user_active_wake.pop(target_user_id)
+            if old_message_id in wake_lookup:
+                wake_lookup.pop(old_message_id)
+        
+        # Store the new wake message
+        user_active_wake[target_user_id] = sent_message.message_id
+        wake_lookup[sent_message.message_id] = {
             'sender_id': sender.id,
             'target_id': target_user_id,
-            'has_replied': False
         }
     except Exception as e:
         # Common reason: bot can't message the user (privacy settings) or blocked

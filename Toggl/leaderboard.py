@@ -6,7 +6,6 @@ from Supabase.supabase_client import get_user_by_tele_id
 
 from telegram import Update
 from telegram.ext import ContextTypes
-from Utilities.button_handlers import show_leaderboard_menu
 from Utilities.command_logging import log_command_usage
 
 
@@ -48,12 +47,11 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             # If it's just /lb, force daily behavior
             pass # period is already 'daily', target_date is 'today'
         else:
-            # If it's /leaderboard with no args, show menu
-            try:
-                await show_leaderboard_menu(update, context)
-                return
-            except Exception:
-                pass # Fallback to daily if menu fails
+            # If it's /leaderboard with no args, show usage
+            await update.message.reply_text(
+                "Usage: `/leaderboard [daily|weekly] [date]`"
+            )
+            return
 
     # Try to parse date argument first if present
     date_parsed = False
@@ -85,11 +83,10 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             # If it's not a recognized period, and not a date, show menu
             # This case should only happen if there's an unrecognized argument after a date, or as the first arg
             if not date_parsed and not original_args[0].lower() in ('weekly', 'week', 'daily', 'day'):
-                try:
-                    await show_leaderboard_menu(update, context)
-                    return
-                except Exception:
-                    pass # Fallback to daily if menu fails
+                await update.message.reply_text(
+                    "Usage: `/leaderboard [daily|weekly] [date]`"
+                )
+                return
 
     # Compute time window based on period and target_date
     if period == 'daily':

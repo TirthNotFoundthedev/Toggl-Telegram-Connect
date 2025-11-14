@@ -19,36 +19,20 @@ async def handle_wake_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Check if the replied-to message was sent by this bot
     if replied_message.from_user and replied_message.from_user.id == bot_user_id:
-        wake_message_replies = context.application.bot_data.get('wake_message_replies', {})
+        wake_lookup = context.application.bot_data.get('wake_message_lookup', {})
         
         # Check if the replied-to message is a wake message we're tracking
-        if replied_message.message_id in wake_message_replies:
-            wake_data = wake_message_replies[replied_message.message_id]
+        if replied_message.message_id in wake_lookup:
+            wake_data = wake_lookup[replied_message.message_id]
             original_sender_id = wake_data['sender_id']
-            target_user_id = wake_data['target_id']
-            has_replied = wake_data['has_replied']
-
-            # Enforce one-message limit
-            if has_replied:
-                await update.effective_message.reply_text(
-                    "You've already replied to this wake message. Only one reply is allowed.",
-                    reply_to_message_id=update.effective_message.message_id
-                )
-                return
 
             # Forward the reply to the original sender
             try:
                 # Construct a message to send to the original sender
-                # Include who replied and what they said
                 replier_mention = update.effective_user.mention_html()
-                original_wake_text = replied_message.text or "a wake message"
-                reply_text = update.effective_message.text or "an empty message"
+                reply_text = update.effective_message.text or "..."
 
-                forward_text = (
-                    f"📢 {replier_mention} replied to your wake message:\n\n"
-                    f"Original wake: \"{original_wake_text}\"\n\n"
-                    f"Reply: \"{reply_text}\""
-                )
+                forward_text = f"{replier_mention} replied to your wake up message: {reply_text}"
 
                 await context.bot.send_message(
                     chat_id=original_sender_id,
@@ -57,18 +41,28 @@ async def handle_wake_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     disable_web_page_preview=True
                 )
                 
-                # Update the has_replied flag
-                wake_data['has_replied'] = True
-                wake_message_replies[replied_message.message_id] = wake_data # Ensure update is saved
+                # Invalidate the wake message after successful reply
+                target_user_id = wake_data['target_id']
+                user_active_wake = context.application.bot_data.get('user_active_wake', {})
+                
+                del wake_lookup[replied_message.message_id]
+                if target_user_id in user_active_wake and user_active_wake[target_user_id] == replied_message.message_id:
+                    del user_active_wake[target_user_id]
 
                 await update.effective_message.reply_text(
-                    "Your reply has been forwarded to the sender of the wake message.",
+                    "Your reply has been forwarded.",
                     reply_to_message_id=update.effective_message.message_id
                 )
 
             except Exception as e:
                 logger.error(f"Failed to forward wake reply: {e}")
                 await update.effective_message.reply_text(
-                    "Failed to forward your reply. The sender might have blocked the bot or started a new chat.",
+                    "Failed to forward your reply. The sender might have blocked the bot.",
                     reply_to_message_id=update.effective_message.message_id
                 )
+        else:
+            # This message is not an active wake message
+            await update.effective_message.reply_text(
+                "This wake-up message has expired or has already been replied to.",
+                reply_to_message_id=update.effective_message.message_id
+            )

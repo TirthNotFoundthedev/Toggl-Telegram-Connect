@@ -7,4 +7,23 @@ This file contains key points for a professional developer to remember about thi
 *   **Database**: The bot uses a Supabase database to store user tokens and command logs. The `supabase_client.py` file provides a convenient interface for interacting with the database.
 *   **Error Handling**: The bot includes error handling for API requests and other potential issues. Errors are logged to the console and, in some cases, sent as messages to the user.
 *   **Commands**: The bot supports a variety of commands for checking Toggl status, viewing reports, and managing users. The `main.py` file registers all of the command handlers.
-*   **Interactive Menus**: The bot uses interactive menus with buttons to make it easier for users to interact with the bot. The `button_handlers.py` file manages these menus.
+*   **Deployment**: To deploy the bot as a single executable, use the following PyInstaller command sequence:
+    1.  Run PyInstaller:
+        ```bash
+        pyinstaller main.py --onefile --noconsole --hidden-import dotenv --hidden-import supabase --hidden-import telegram
+        ```
+    2.  Delete the old executable (if it exists):
+        ```bash
+        Remove-Item -Path "dist/Toggl Status Checker.exe" -ErrorAction SilentlyContinue
+        ```
+    3.  Rename the newly created `main.exe`:
+        ```bash
+        Rename-Item -Path "dist/main.exe" -NewName "Toggl Status Checker.exe"
+        ```
+    4.  Run the new executable:
+        ```bash
+        Start-Process -FilePath "dist/Toggl Status Checker.exe"
+        ```
+*   **Notifications**: A custom notification script is available at `GEMINI-Addons/notifier.py`. It can be used to send messages via a Telegram bot.
+
+    *   **Usage**: `python GEMINI-Addons/notifier.py "Your message here"`

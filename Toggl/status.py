@@ -10,7 +10,6 @@ from Supabase.supabase_client import get_user_by_tele_id
 # --- Telegram Bot Imports ---
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from Utilities.button_handlers import show_status_menu
 from Utilities.command_logging import log_command_usage
 
 
@@ -134,7 +133,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         if not context.args:
-            await show_status_menu(update, context)
+            await update.message.reply_text(
+                "Please specify a user to check. Usage: `/status <name>` or `/status all`"
+            )
             return
         
         user_key_input = context.args[0].lower()

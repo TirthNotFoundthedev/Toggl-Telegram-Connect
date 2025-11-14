@@ -56,7 +56,8 @@ def main() -> None:
 
     # Store the map where all handlers can access it
     application.bot_data['toggl_token_map'] = toggl_token_map
-    application.bot_data['wake_message_replies'] = {} # Initialize for wake message reply tracking
+    application.bot_data['wake_message_lookup'] = {} # Maps message_id to wake data
+    application.bot_data['user_active_wake'] = {} # Maps target_user_id to the message_id of their active wake
     logger.info(f"Bot initialized with {len(toggl_token_map)} users from Supabase.")
 
     # Preload wake cooldowns for configured users (small userbase; safe to preload)
@@ -91,10 +92,6 @@ def main() -> None:
     # Handler for replies to wake messages
     from Utilities.reply_handler import handle_wake_reply
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wake_reply), group=0)
-
-    # Centralized plain-text button router (handles start/status/today/wake menus)
-    from Utilities.button_handlers import button_tap_router
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_tap_router), group=1)
 
     # Run the bot until the user presses Ctrl-C
     logger.info("Bot started. Press Ctrl-C to stop.")
