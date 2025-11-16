@@ -5,7 +5,6 @@ from telegram.ext import Application, CommandHandler
 # FIX: Import Update class for use with application.run_polling
 from telegram import Update 
 from telegram.ext import MessageHandler, filters
-from telegram.constants import ChatType
 
 from Utilities.general import start_command
 from Utilities.users import add_user_command, users_command
@@ -76,23 +75,23 @@ def main() -> None:
         logger.exception("Failed to preload wake_cooldown values from Supabase")
 
     # Register command handlers
-    application.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.SUPERGROUP))
+    application.add_handler(CommandHandler("start", start_command))
     # Register command handlers
-    application.add_handler(CommandHandler("status", status_command, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("today", today_command, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("lb", leaderboard_command, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("add_user", add_user_command, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("users", users_command, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("wake", wake, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("fnr", fnr_command, filters=filters.ChatType.SUPERGROUP))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("today", today_command))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("lb", leaderboard_command))
+    application.add_handler(CommandHandler("add_user", add_user_command))
+    application.add_handler(CommandHandler("users", users_command))
+    application.add_handler(CommandHandler("wake", wake))
+    application.add_handler(CommandHandler("fnr", fnr_command))
     # Admin commands
-    application.add_handler(CommandHandler("wake_cooldowns", view_wake_cooldowns, filters=filters.ChatType.SUPERGROUP))
-    application.add_handler(CommandHandler("wake_cooldown_reset", reset_wake_cooldown, filters=filters.ChatType.SUPERGROUP))
+    application.add_handler(CommandHandler("wake_cooldowns", view_wake_cooldowns))
+    application.add_handler(CommandHandler("wake_cooldown_reset", reset_wake_cooldown))
 
     # Handler for replies to wake messages
     from Utilities.reply_handler import handle_wake_reply
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.SUPERGROUP, handle_wake_reply), group=0)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wake_reply), group=0)
 
     # Run the bot until the user presses Ctrl-C
     logger.info("Bot started. Press Ctrl-C to stop.")
