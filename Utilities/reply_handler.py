@@ -60,9 +60,5 @@ async def handle_wake_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     "Failed to forward your reply. The sender might have blocked the bot.",
                     reply_to_message_id=update.effective_message.message_id
                 )
-        else:
-            # This message is not an active wake message
-            await update.effective_message.reply_text(
-                "This wake-up message has expired or has already been replied to.",
-                reply_to_message_id=update.effective_message.message_id
-            )
+        
+
