@@ -17,8 +17,8 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Show leaderboard of total tracked time across configured users.
 
     Usage:
-      /leaderboard           (or /lb) -> shows daily leaderboard (default)
-      /leaderboard weekly    -> shows current week's leaderboard
+      /leaderboard [daily|weekly] [-N]
+      -N can be an offset from -1 to -50.
     """
     toggl_token_map = context.application.bot_data.get('toggl_token_map', {})
     if not toggl_token_map:
@@ -28,78 +28,67 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # Determine period and target_date
     local_tz = datetime.now().astimezone().tzinfo
     now_local = datetime.now().astimezone()
-    target_date = now_local.date() # Default to today
-    period = 'daily' # Default period
+    
+    args = list(context.args or [])
+    period = 'daily'
+    offset = 0
 
-    args = context.args or []
-    original_args = list(args) # Keep original args for menu check
+    # Normalize arguments
+    if 'daily' in args or 'day' in args:
+        period = 'daily'
+        if 'daily' in args: args.remove('daily')
+        if 'day' in args: args.remove('day')
+    elif 'weekly' in args or 'week' in args:
+        period = 'weekly'
+        if 'weekly' in args: args.remove('weekly')
+        if 'week' in args: args.remove('week')
 
-    # Check for /lb alias with no arguments
-    if not args:
-        raw = None
-        if update and update.effective_message and getattr(update.effective_message, 'text', None):
-            raw = update.effective_message.text.strip()
-        first = raw.split()[0].lower() if raw else ''
-        if first.startswith('/lb') and (first == '/lb' or first.startswith('/lb@')):
-            # If it's just /lb, force daily behavior
-            pass # period is already 'daily', target_date is 'today'
-        else:
-            # If it's /leaderboard with no args, show usage
-            await update.message.reply_text(
-                "Usage: `/leaderboard [daily|weekly] [date]`"
-            )
-            return
-
-    # Try to parse date argument first if present
-    date_parsed = False
-    if args:
-        arg_val = args[0].lower()
-        if arg_val == '-1':
-            target_date = now_local.date() - timedelta(days=1)
-            args.pop(0) # Consume the argument
-            date_parsed = True
-        else:
-            try:
-                parsed_date = datetime.strptime(arg_val, '%d/%m/%y').date()
-                target_date = parsed_date
-                args.pop(0) # Consume the argument
-                date_parsed = True
-            except ValueError:
-                pass # Not a date, continue to period parsing
-
-    # Now parse period if any arguments remain and no date was explicitly set
-    if args:
-        a = args[0].lower()
-        if a in ('weekly', 'week'):
-            period = 'weekly'
-            args.pop(0) # Consume the argument
-        elif a in ('daily', 'day'):
-            period = 'daily'
-            args.pop(0) # Consume the argument
-        else:
-            # If it's not a recognized period, and not a date, show menu
-            # This case should only happen if there's an unrecognized argument after a date, or as the first arg
-            if not date_parsed and not original_args[0].lower() in ('weekly', 'week', 'daily', 'day'):
-                await update.message.reply_text(
-                    "Usage: `/leaderboard [daily|weekly] [date]`"
-                )
+    # Find and parse offset
+    offset_arg = next((arg for arg in args if arg.startswith('-') and arg[1:].isdigit()), None)
+    if offset_arg:
+        try:
+            val = int(offset_arg)
+            if -50 <= val <= -1:
+                offset = val
+                args.remove(offset_arg)
+            else:
+                await update.message.reply_text("Offset must be between -1 and -50.")
                 return
+        except ValueError:
+            pass # Should not happen due to the check above
 
-    # Compute time window based on period and target_date
+    if args: # If any unrecognized arguments are left
+        await update.message.reply_text(
+            "Usage: `/leaderboard [daily|weekly] [-N]` where N is 1-50."
+        )
+        return
+
+    # Compute time window
     if period == 'daily':
+        target_date = now_local.date() + timedelta(days=offset)
         start_local = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=local_tz)
         end_local = start_local + timedelta(days=1)
         title_period = f"Daily leaderboard for {target_date.strftime('%d/%m/%y')}"
     else: # weekly
-        # For weekly, target_date is ignored, always use current week
         today = now_local.date()
-        monday = today - timedelta(days=today.weekday())
-        start_local = datetime.combine(monday, datetime.min.time()).replace(tzinfo=local_tz)
-        end_local = now_local
-        title_period = f"Weekly leaderboard (since {start_local.date().strftime('%d/%m/%y')})"
+        # Calculate the start of the week (Monday) for the target week
+        start_of_current_week = today - timedelta(days=today.weekday())
+        start_of_target_week = start_of_current_week + timedelta(weeks=offset)
+        
+        # The end of the target week is 6 days after the start
+        end_of_target_week = start_of_target_week + timedelta(days=6)
+
+        start_local = datetime.combine(start_of_target_week, datetime.min.time()).replace(tzinfo=local_tz)
+        # For the current week, the end date should be now, not the end of the week
+        if offset == 0:
+            end_local = now_local
+            title_period = f"Weekly leaderboard (since {start_local.date().strftime('%d/%m/%y')})"
+        else:
+            end_local = datetime.combine(end_of_target_week, datetime.max.time()).replace(tzinfo=local_tz)
+            title_period = f"Weekly leaderboard ({start_local.date().strftime('%d/%m/%y')} - {end_local.date().strftime('%d/%m/%y')})"
+
 
     start_iso = start_local.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
     end_iso = end_local.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -128,22 +117,16 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             totals.append((user_key, None, str(e)))
             continue
 
-        # Sum durations for entries whose start is within local-day/week bounds
         def safe_start_dt(e):
             s = e.get('start')
-            if not s:
-                return None
-            try:
-                return datetime.fromisoformat(s.replace('Z', '+00:00'))
-            except Exception:
-                return None
+            if not s: return None
+            try: return datetime.fromisoformat(s.replace('Z', '+00:00'))
+            except Exception: return None
 
         total_seconds = 0
         for e in entries:
             sdt = safe_start_dt(e)
-            if not sdt:
-                continue
-            if not (start_local.astimezone(timezone.utc) <= sdt < end_local.astimezone(timezone.utc)):
+            if not sdt or not (start_local.astimezone(timezone.utc) <= sdt < end_local.astimezone(timezone.utc)):
                 continue
 
             duration_val = e.get('duration')
@@ -156,14 +139,11 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                     start_dt = datetime.fromisoformat(start_s.replace('Z', '+00:00'))
                     stop_dt = datetime.fromisoformat(stop_s.replace('Z', '+00:00')) if stop_s else datetime.now(timezone.utc)
                     total_seconds += int((stop_dt - start_dt).total_seconds())
-                except Exception:
-                    pass
-
+                except Exception: pass
+        
         totals.append((user_key, total_seconds, None))
 
-    # Sort by total_seconds descending, handle errors to bottom
-    successful = [(u, s) for (u, s, e) in totals if e is None]
-    successful.sort(key=lambda x: x[1] or 0, reverse=True)
+    successful = sorted([(u, s) for (u, s, e) in totals if e is None], key=lambda x: x[1] or 0, reverse=True)
 
     lines = [f"📊 *{title_period}*\n"]
     if not successful:
@@ -173,12 +153,10 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             display = u.capitalize()
             formatted = format_duration(secs or 0)
             if idx == 1:
-                # make first person stand out
                 lines.append(f"1. 🏆 *{display}*: `{formatted}`")
             else:
                 lines.append(f"{idx}. {display}: `{formatted}`")
 
-    # Append error lines if any
     for (u, s, err) in totals:
         if err:
             lines.append(f"- {u.capitalize()}: 🚨 {err}")
