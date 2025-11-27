@@ -115,25 +115,27 @@ def telegram_webhook_handler(request):
     try:
         application = get_application()
         
-        # 1. Retrieve the JSON update
+        # Step 1: get JSON
         if request.is_json:
-            json_update = request.get_json(silent=True)
+            json_data = request.get_json(silent=True)
         else:
-            # Fallback if content-type is not application/json
-            # (Though Telegram sends JSON)
             import json
-            json_update = json.loads(request.get_data(as_text=True))
+            json_data = json.loads(request.get_data(as_text=True))
 
-        if not json_update:
+        if not json_data:
             return "No JSON received", 400
 
-        # 2. Reconstruct Update object
-        update = Update.de_json(json_update, application.bot)
+        # Step 2: Telegram might send a LIST of updates
+        # Normalize into a list
+        updates_raw = json_data if isinstance(json_data, list) else [json_data]
 
-        # 3. Process on already-running PTB Application
-        asyncio.run(application.process_update(update))
+        # Step 3: Process each update
+        for update_raw in updates_raw:
+            update = Update.de_json(update_raw, application.bot)
+            asyncio.run(application.process_update(update))
 
-        return "ok"
+        return "ok", 200
+
     except Exception:
         logger.exception("Error in telegram_webhook_handler")
         return "error", 500
