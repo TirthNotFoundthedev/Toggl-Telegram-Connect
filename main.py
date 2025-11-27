@@ -54,6 +54,10 @@ def get_application() -> Application:
     # Build the Application
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Required for webhook mode — initialize and start PTB Application
+    asyncio.run(application.initialize())
+    asyncio.run(application.start())
+    
     # Initialize the token map in the bot's persistent data store
     toggl_token_map = {}
     
@@ -109,7 +113,7 @@ def telegram_webhook_handler(request):
     Receives the request object from GCF (Flask-like).
     """
     try:
-        app = get_application()
+        application = get_application()
         
         # 1. Retrieve the JSON update
         if request.is_json:
@@ -123,15 +127,14 @@ def telegram_webhook_handler(request):
         if not json_update:
             return "No JSON received", 400
 
-        # 2. Reconstruct the Update object
-        update = Update.de_json(json_update, app.bot)
+        # 2. Reconstruct Update object
+        update = Update.de_json(json_update, application.bot)
 
-        # 3. Process the update
-        # Since GCF is synchronous (mostly), we run the async process_update in an event loop
-        asyncio.run(app.process_update(update))
+        # 3. Process on already-running PTB Application
+        asyncio.run(application.process_update(update))
 
         return "ok"
-    except Exception as e:
+    except Exception:
         logger.exception("Error in telegram_webhook_handler")
         return "error", 500
 
