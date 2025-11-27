@@ -94,8 +94,24 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wake_reply), group=0)
 
     # Run the bot until the user presses Ctrl-C
-    logger.info("Bot started. Press Ctrl-C to stop.")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Check for Webhook configuration
+    webhook_url = os.getenv("WEBHOOK_URL")
+    
+    if webhook_url:
+        port = int(os.getenv("PORT", 8000))
+        secret_token = os.getenv("WEBHOOK_SECRET")
+        logger.info(f"Starting bot in WEBHOOK mode. Listening on port {port}...")
+        
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path="telegram-webhook",
+            webhook_url=f"{webhook_url}/telegram-webhook",
+            secret_token=secret_token
+        )
+    else:
+        logger.info("WEBHOOK_URL not found. Starting bot in POLLING mode...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
