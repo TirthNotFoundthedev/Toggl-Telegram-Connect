@@ -132,7 +132,13 @@ def telegram_webhook_handler(request):
         # Step 3: Process each update
         for update_raw in updates_raw:
             update = Update.de_json(update_raw, application.bot)
-            asyncio.run(application.process_update(update))
+            # Use existing event loop instead of creating a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(application.process_update(update))
+            finally:
+                loop.close()
 
         return "ok", 200
 
