@@ -130,15 +130,13 @@ def telegram_webhook_handler(request):
         updates_raw = json_data if isinstance(json_data, list) else [json_data]
 
         # Step 3: Process each update
-        for update_raw in updates_raw:
-            update = Update.de_json(update_raw, application.bot)
-            # Use existing event loop instead of creating a new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(application.process_update(update))
-            finally:
-                loop.close()
+        async def process_all_updates():
+            for update_raw in updates_raw:
+                update = Update.de_json(update_raw, application.bot)
+                await application.process_update(update)
+        
+        # Run all updates in a single event loop
+        asyncio.run(process_all_updates())
 
         return "ok", 200
 
