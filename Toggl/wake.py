@@ -83,13 +83,8 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await update.effective_message.reply_text("No configured users with Telegram IDs found.")
                 return
 
-            summary = {
-                'sent': 0,
-                'skipped_self': 0,
-                'already_studying': 0,
-                'rate_limited': 0,
-                'failed': 0,
-            }
+            # Track results per user
+            results = []
 
             # Custom message for 'all' command
             if remaining_args:
@@ -109,16 +104,19 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             for row in users:
                 try:
                     tele = row.get('tele_id')
+                    user_name = row.get('user_name', 'Unknown')
+                    
                     if not tele:
                         continue
+                    
                     # Skip sender
                     try:
                         if int(tele) == sender.id:
-                            summary['skipped_self'] += 1
+                            results.append(f"• {user_name}: Skipped (self)")
                             continue
                     except Exception:
                         if str(tele) == str(sender.id):
-                            summary['skipped_self'] += 1
+                            results.append(f"• {user_name}: Skipped (self)")
                             continue
 
                     # Check if already studying
@@ -127,7 +125,7 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         if toggl_token:
                             entry = check_toggl_status(toggl_token)
                             if entry and not (isinstance(entry, dict) and 'error' in entry):
-                                summary['already_studying'] += 1
+                                results.append(f"• {user_name}: Already studying ✅")
                                 continue
                     except Exception:
                         pass
@@ -160,13 +158,14 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             rate_limited = False
 
                     if rate_limited:
-                        summary['rate_limited'] += 1
+                        results.append(f"• {user_name}: Rate limited ⏱")
                         continue
 
                     # Attempt send
                     try:
                         sent_message = await bot.send_message(chat_id=int(tele), text=private_text_all, parse_mode=ParseMode.HTML)
-                        summary['sent'] += 1
+                        results.append(f"• {user_name}: Sent 📨")
+                        
                         # New logic: Invalidate previous wake for this target and store new one
                         wake_lookup = context.application.bot_data.setdefault('wake_message_lookup', {})
                         user_active_wake = context.application.bot_data.setdefault('user_active_wake', {})
@@ -197,16 +196,16 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     except Exception:
                         # Log the exception (with traceback) so you can see why sending failed
                         logging.exception("Failed to send wake message to tele_id=%s (row=%s)", tele, row)
-                        summary['failed'] += 1
+                        results.append(f"• {user_name}: Failed ❌")
                         continue
 
                 except Exception:
-                    summary['failed'] += 1
+                    results.append(f"• {row.get('user_name', 'Unknown')}: Failed ❌")
                     continue
 
-            await update.effective_message.reply_text(
-                f"Wake-all completed. Sent: {summary['sent']}. Already studying: {summary['already_studying']}. Rate-limited: {summary['rate_limited']}. Skipped self: {summary['skipped_self']}. Failed: {summary['failed']}"
-            )
+            # Build the response message
+            response = "Wake-all results:\n\n" + "\n".join(results)
+            await update.effective_message.reply_text(response)
             return
 
         # 2) If mentions a username like @username, try to resolve to a chat (works if bot can access the user)
