@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from dotenv import load_dotenv 
 from telegram.ext import Application, CommandHandler
 # FIX: Import Update class for use with application.run_polling
@@ -24,25 +25,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global variable to cache the application instance
+_application = None
 
+def get_application() -> Application:
+    """Initialize and return the Telegram Application."""
+    global _application
+    if _application:
+        return _application
 
-
-def main() -> None:
-    """Start the bot."""
-    
     # 1. Load environment variables
     load_dotenv()
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
     if not BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN environment variable is not set. Exiting.")
-        return
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set.")
 
     # 2. Initialize Supabase Client
     if not init_supabase():
         logger.error("Supabase client initialization failed. Bot cannot save or load tokens from DB.")
         # We allow the bot to run, but /add_user and /status based on DB will fail
-        # You should fix your SUPABASE_URL/SUPABASE_KEY in .env
     
     # Build the Application
     application = Application.builder().token(BOT_TOKEN).build()
@@ -93,26 +96,38 @@ def main() -> None:
     from Utilities.reply_handler import handle_wake_reply
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wake_reply), group=0)
 
-    # Run the bot until the user presses Ctrl-C
-    # Check for Webhook configuration
-    webhook_url = os.getenv("WEBHOOK_URL")
-    
-    if webhook_url:
-        port = int(os.getenv("PORT", 8000))
-        secret_token = os.getenv("WEBHOOK_SECRET")
-        logger.info(f"Starting bot in WEBHOOK mode. Listening on port {port}...")
+    _application = application
+    return application
+
+def telegram_webhook_handler(request):
+    """
+    GCF Entry Point.
+    Receives the request object from GCF (Flask-like).
+    """
+    try:
+        app = get_application()
         
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path="telegram-webhook",
-            webhook_url=f"{webhook_url}/telegram-webhook",
-            secret_token=secret_token
-        )
-    else:
-        logger.info("WEBHOOK_URL not found. Starting bot in POLLING mode...")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # 1. Retrieve the JSON update
+        if request.is_json:
+            json_update = request.get_json(silent=True)
+        else:
+            # Fallback if content-type is not application/json
+            # (Though Telegram sends JSON)
+            import json
+            json_update = json.loads(request.get_data(as_text=True))
 
+        if not json_update:
+            return "No JSON received", 400
 
-if __name__ == "__main__":
-    main()
+        # 2. Reconstruct the Update object
+        update = Update.de_json(json_update, app.bot)
+
+        # 3. Process the update
+        # Since GCF is synchronous (mostly), we run the async process_update in an event loop
+        asyncio.run(app.process_update(update))
+
+        return "ok"
+    except Exception as e:
+        logger.exception("Error in telegram_webhook_handler")
+        return "error", 500
+
