@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 from dotenv import load_dotenv 
+from flask import Flask, request
 from telegram.ext import Application, CommandHandler
 # FIX: Import Update class for use with application.run_polling
 from telegram import Update 
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 # Global variable to cache the application instance
 _application = None
+
+# Initialize Flask app
+app = Flask(__name__)
 
 def get_application() -> Application:
     """Initialize and return the Telegram Application."""
@@ -130,4 +134,9 @@ def telegram_webhook_handler(request):
     except Exception as e:
         logger.exception("Error in telegram_webhook_handler")
         return "error", 500
+
+@app.route('/', methods=['POST'])
+def webhook():
+    """Flask route for handling Telegram webhook."""
+    return telegram_webhook_handler(request)
 
